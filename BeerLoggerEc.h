@@ -52,7 +52,7 @@ void settingsApply();
 void mainDisplay();
 void toggleWriteMode();
 
-int uiSettings(int);
+int uiLoggerSettings(int);
 int uiTempDisplay(int);
 int uiMessage(int);
 

@@ -53,7 +53,7 @@ enum UiResults {
 #define UI_TARGET_NUM 3
 enum UiTargets {
 	UIT_TEMP_DISPLAY = 0,
-	UIT_SETTINGS = 1,
+	UIT_LOGGER_SETTINGS = 1,
 	UIT_MESSAGE = 2,
 	UIT_DUMMY = -1
 };
@@ -67,11 +67,11 @@ enum UiTargets {
 typedef int (* UiTarget) (int);
 volatile UiTarget uiTargets[UI_TARGET_NUM] = {
 		&uiTempDisplay,
-		&uiSettings,
+		&uiLoggerSettings,
 		&uiMessage,
 };
 int uiTargetContinueMap[UI_TARGET_NUM] = {
-		UIT_SETTINGS,
+		UIT_LOGGER_SETTINGS,
 		UIT_TEMP_DISPLAY,
 		UIT_DUMMY
 };
@@ -520,7 +520,7 @@ int uiTempDisplay(int action)
 	return(ret);
 }
 
-int uiSettings(int action)
+int uiLoggerSettings(int action)
 {
 	//static int intvSet;
 	int ret = 0;
