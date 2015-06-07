@@ -43,11 +43,20 @@ void encLogInterval(int);
 void writeLog(int index);
 
 void setMessage(String msg);
+void doEncSw();
 void doClearButton();
-void toggleWriteMode();
+
 
 void settingsApply();
 
+void mainDisplay();
+void toggleWriteMode();
+
+int uiSettings(int);
+int uiTempDisplay(int);
+int uiMessage(int);
+
+void handleUi(int);
 
 
 

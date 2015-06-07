@@ -27,15 +27,58 @@ int refPin = A7;
 enum PinAssignments {
   encoderPinA = A11,   // right (labeled DT on our decoder, yellow wire)
   encoderPinB = A10,   // left (labeled CLK on our decoder, green wire)
-  clearButton = A12,    // switch (labeled SW on our decoder, orange wire)
+  encoderSW = A12,    // switch (labeled SW on our decoder, orange wire)
 // connect the +5v and gnd appropriately
   /// Write mode switch
-  writeButton = A13,
+  clearButton = A13,
 };
 
+
+enum UiActions {
+	UI_DISPLAY,
+	UI_ENC_UP,
+	UI_ENC_DOWN,
+	UI_ENC_SW,
+	UI_CLEAR,
+	UI_ENTER,
+	UI_LEAVE
+};
+enum UiResults {
+	RET_STAY,
+	RET_HOME,
+	RET_CONTINUE
+};
+
+// I'd like to have a better way to define this. Right now it's a bit murky
+#define UI_TARGET_NUM 3
+enum UiTargets {
+	UIT_TEMP_DISPLAY = 0,
+	UIT_SETTINGS = 1,
+	UIT_MESSAGE = 2,
+	UIT_DUMMY = -1
+};
+
+/// UI handler
+// Returns:
+// true if the UI leaves, false if it stays
+// takes as parameter:
+// int: the UiAction
+// void *: a pointer to a custom "static structure" containing the UI state
+typedef int (* UiTarget) (int);
+volatile UiTarget uiTargets[UI_TARGET_NUM] = {
+		&uiTempDisplay,
+		&uiSettings,
+		&uiMessage,
+};
+int uiTargetContinueMap[UI_TARGET_NUM] = {
+		UIT_SETTINGS,
+		UIT_TEMP_DISPLAY,
+		UIT_DUMMY
+};
+
+volatile int uiTarget;
+
 /// Rotary encoder
-typedef void (* IncrementTarget)(int);
-volatile IncrementTarget encoderTarget = &encScreenPos;
 static boolean rotating=false;      // debounce management
 // Rotary encoder: interrupt service routine vars
 boolean A_set = false;
@@ -49,8 +92,6 @@ RTC_DS1307 RTC;
 
 
 /// Software
-volatile boolean settingsState = false;
-volatile boolean messageState = false;
 String message = "";
 
 volatile int logInterval = 10;
@@ -139,23 +180,21 @@ volatile boolean debouncing = false;
 #define LOOP_DELAY 40
 const boolean delayLoop = true;
 
-byte screenUpdate = 0;
-
 void setup() {
   // put your setup code here, to run once:
   /// Rotary encoder
   pinMode(encoderPinA, INPUT_PULLUP); // new method of enabling pullups
   pinMode(encoderPinB, INPUT_PULLUP);
+  pinMode(encoderSW, INPUT_PULLUP);
   pinMode(clearButton, INPUT_PULLUP);
-  pinMode(writeButton, INPUT_PULLUP);
   // encoder pin on PCE (pin a)
   attachPinChangeInterrupt(encoderPinA, doEncoderA, CHANGE);
   // encoder pin on PCE (pin b)
   attachPinChangeInterrupt(encoderPinB, doEncoderB, CHANGE);
 
+  attachPinChangeInterrupt(encoderSW, doEncSw, RISING);
   attachPinChangeInterrupt(clearButton, doClearButton, RISING);
 
-  attachPinChangeInterrupt(writeButton, toggleWriteMode, RISING);
 
   /// RTC
   Wire.begin();
@@ -223,112 +262,21 @@ void scheduleEvent(int eventId, long tDelay)
   eventsExecuted[eventId] = true;
 }
 
-/// Encoder: rotator handling
 
-// Interrupt on A changing state
-void doEncoderA(){
-  // debounce
-  if ( rotating ) delay (1);  // wait a little until the bouncing is done
-
-  // Test transition, did things really change?
-  if( digitalRead(encoderPinA) != A_set ) {  // debounce once more
-    A_set = !A_set;
-
-    // adjust counter + if A leads B
-    if ( A_set && !B_set )
-    {
-    	if(encoderTarget)
-    		(encoderTarget)(1);
-    }
-
-    rotating = false;  // no more debouncing until loop() hits again
-  }
-}
-
-// Interrupt on B changing state, same as A above
-void doEncoderB(){
-  if ( rotating ) delay (1);
-  if( digitalRead(encoderPinB) != B_set ) {
-    B_set = !B_set;
-    //  adjust counter - 1 if B leads A
-    if( B_set && !A_set )
-    {
-    	if(encoderTarget)
-    		(encoderTarget)(-1);
-    }
-
-    rotating = false;
-  }
-}
 
 /// Software: LCD screen
 void fpUpdateScreen()
 {
-  screenUpdate++;
-  char outString[16];
   lcd.clear();
-  if(messageState)
-  {
-    lcd.print(message);
-  }
-  else if (settingsState)
-  {
-     lcd.setCursor(0,0);
-     lcd.print("Interval:");
-     lcd.setCursor(0,1);
-     lcd.print(logInterval);
-     lcd.print(" ");
-     lcd.print(scheduleTime[cycle]);
-  }
-  else
-  {
 
-    byte screenBufPos = bufferPos - screenPos;
-    DateTime ts = tsBuffer[screenBufPos];
-    float tAir = dataBuffer[screenBufPos][0];
-    float tLiquid = dataBuffer[screenBufPos][1];
-     lcd.setCursor(0,0);
+  handleUi(UI_DISPLAY);
 
-     lcd.print(screenBufPos);
-
-     lcd.setCursor(4,0);
-     //sprintf(outString, "%4.1f", tAir);
-     lcd.print(tAir,1);
-     lcd.print(" ");
-     //sprintf(outString, "%4.1f", tLiquid);
-     //lcd.print(outString);
-     lcd.print(tLiquid,1);
-
-
-
-    lcd.setCursor(0,1);
-    sprintf(outString, "%02d/%02d %02d:%02d:%02d",
-    		ts.month(), ts.day(), ts.hour(), ts.minute(), ts.second());
-    lcd.print(outString);
-
-
-    lcd.setCursor(15,1);
-    if(liveWrite)
-      lcd.print('W');
-    else
-      lcd.print('B');
-
-    if(screenPos == 0)
-    {
-    	lcd.setCursor(0,0);
-    	lcd.cursor();
-    }
-    else
-    {
-    	lcd.noCursor();
-    }
-  }
 }
 void fpCycle()
 {
   bufferPos++;
   // Keep the screen at the old position if it was not on liveshow (pos 0)
-  if(screenPos != 0) screenPos--;
+  if(screenPos != 0) screenPos++;
   // read date/time and temperatures into current buffer
   tsBuffer[bufferPos] = RTC.now();
   dataBuffer[bufferPos][0] = getAirTemp();
@@ -457,67 +405,241 @@ void fpManageSD(){
 /// Software: Screen messages on errors etc
 void setMessage(String msg){
   message = msg;
-  messageState = true;
+  handleUi(UI_LEAVE);
+  uiTarget = UIT_MESSAGE;
   scheduleEvent(updateScreen, 1);
 }
 
+/// Encoder: rotator handling
 
-void doClearButton(){
-  if(debouncing) return;
-  // State logic: If in message state, clear message state (and go back to reporting state)
-  // If in reporting state, go to setting state
-  //
-  if(messageState)
-	  messageState = false;
-  if(settingsState)
-  {
-	  encoderTarget = &encScreenPos;
-	  settingsApply();
-	  settingsState = false;
-  }
-  else
-  {
-	  encoderTarget = &encLogInterval;
-	  settingsState = true;
-  }
+// Interrupt on A changing state
+void doEncoderA(){
+  // debounce
+  if ( rotating ) delay (10);  // wait a little until the bouncing is done
 
-  debouncing = true;
-  scheduleEvent(clearDebounce, DEBOUNCE_DELAY);
-  scheduleEvent(updateScreen, 1);
+  // Test transition, did things really change?
+  if( digitalRead(encoderPinA) != A_set ) {  // debounce once more
+    A_set = !A_set;
+
+    // adjust counter + if A leads B
+    if ( A_set && !B_set )
+    {
+    	handleUi(UI_ENC_UP);
+    }
+
+    rotating = false;  // no more debouncing until loop() hits again
+  }
+}
+
+// Interrupt on B changing state, same as A above
+void doEncoderB(){
+  if ( rotating ) delay (10);
+  if( digitalRead(encoderPinB) != B_set ) {
+    B_set = !B_set;
+    //  adjust counter - 1 if B leads A
+    if( B_set && !A_set )
+    {
+    	handleUi(UI_ENC_DOWN);
+    }
+
+    rotating = false;
+  }
+}
+
+void doEncSw(){
+	if(debouncing) return;
+	handleUi(UI_ENC_SW);
+
+	debouncing = true;
+	scheduleEvent(clearDebounce, DEBOUNCE_DELAY);
+}
+
+void doClearButton()
+{
+	if(debouncing) return;
+	handleUi(UI_CLEAR);
+	// debounce
+	debouncing = true;
+	scheduleEvent(clearDebounce, DEBOUNCE_DELAY);
+}
+
+
+void handleUi(int action)
+{
+	int ret;
+
+	ret = (uiTargets[uiTarget])(action);
+	switch(ret)
+	{
+	case RET_HOME:
+		uiTarget = UIT_TEMP_DISPLAY;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case RET_CONTINUE:
+		uiTarget = uiTargetContinueMap[uiTarget];
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case RET_STAY:
+		break;
+	}
+}
+
+int uiTempDisplay(int action)
+{
+	int ret = 0;
+	int sp = screenPos;
+	switch(action)
+	{
+	case UI_LEAVE:
+		// in this case, do nothing because the difference is handled
+		// by UI_ENC_SW vs UI_CLEAR
+		break;
+	case UI_ENTER:
+		break;
+	case UI_ENC_UP:
+		sp -= 1;
+		if(sp < 0) sp = 0;
+		screenPos = sp;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_DOWN:
+		sp += 1;
+		screenPos = sp;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_SW:
+		ret = RET_CONTINUE;
+		break;
+	case UI_CLEAR:
+		toggleWriteMode();
+		break;
+	case UI_DISPLAY:
+		mainDisplay();
+		break;
+	}
+	return(ret);
+}
+
+int uiSettings(int action)
+{
+	//static int intvSet;
+	int ret = 0;
+	long li = logInterval;
+	switch(action)
+	{
+	case UI_LEAVE:
+		// in this case, do nothing because the difference is handled
+		// by UI_ENC_SW vs UI_CLEAR
+		break;
+	case UI_ENTER:
+		break;
+	case UI_ENC_UP:
+		li += 1;
+		if(li > 1000) li = 1000;
+		logInterval = li;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_DOWN:
+		li -= 1;
+		if(li < 5) li = 5;
+		logInterval = li;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_SW:
+		scheduleTime[cycle] = 1000 * li;
+		scheduleEvent(cycle, scheduleTime[cycle]);
+		ret = RET_CONTINUE;
+		break;
+	case UI_CLEAR:
+		ret = RET_HOME;
+		break;
+	case UI_DISPLAY:
+		lcd.setCursor(0,0);
+		lcd.print("Interval:");
+		lcd.setCursor(0,1);
+		lcd.print(logInterval);
+		lcd.print(" ");
+		lcd.print(scheduleTime[cycle]);
+		break;
+	}
+	return(ret);
+}
+
+int uiMessage(int action)
+{
+	int ret = RET_STAY;
+	long li = logInterval;
+	switch(action)
+	{
+	case UI_LEAVE:
+		break;
+	case UI_ENTER:
+		break;
+	case UI_ENC_UP:
+		break;
+	case UI_ENC_DOWN:
+		break;
+	case UI_ENC_SW:
+		ret = RET_HOME;
+		break;
+	case UI_CLEAR:
+		ret = RET_HOME;
+		break;
+	case UI_DISPLAY:
+	    lcd.print(message);
+	    break;
+	}
+	return(ret);
+}
+
+
+void mainDisplay()
+{
+    char outString[16];
+
+    byte screenBufPos = bufferPos - screenPos;
+    DateTime ts = tsBuffer[screenBufPos];
+    float tAir = dataBuffer[screenBufPos][0];
+    float tLiquid = dataBuffer[screenBufPos][1];
+     lcd.setCursor(0,0);
+
+     lcd.print(screenBufPos);
+
+     lcd.setCursor(4,0);
+     //sprintf(outString, "%4.1f", tAir);
+     lcd.print(tAir,1);
+     lcd.print(" ");
+     //sprintf(outString, "%4.1f", tLiquid);
+     //lcd.print(outString);
+     lcd.print(tLiquid,1);
+
+
+
+    lcd.setCursor(0,1);
+    sprintf(outString, "%02d/%02d %02d:%02d:%02d",
+    		ts.month(), ts.day(), ts.hour(), ts.minute(), ts.second());
+    lcd.print(outString);
+
+    lcd.setCursor(15,1);
+    if(liveWrite)
+      lcd.print('W');
+    else
+      lcd.print('B');
+
+    if(screenPos == 0)
+    {
+    	lcd.setCursor(0,0);
+    	lcd.cursor();
+    }
+    else
+    {
+    	lcd.noCursor();
+    }
 }
 
 void toggleWriteMode(){
-  if(debouncing) return;
   liveWrite = !liveWrite;
   scheduleEvent(manageSD, 1);
-  // debounce
-  debouncing = true;
-  scheduleEvent(clearDebounce, DEBOUNCE_DELAY);
+
   scheduleEvent(updateScreen, 1);
-}
-
-void encScreenPos(int increment)
-{
-	int sp = screenPos;
-	sp -= increment;
-	if(sp < 0) sp = 0;
-	screenPos = sp;
-    scheduleEvent(updateScreen, 1);
-}
-
-void encLogInterval(int increment)
-{
-	int li = logInterval;
-	li += increment;
-	if(li < 10) li = 10;
-	logInterval = li;
-    scheduleEvent(updateScreen, 1);
-
-}
-
-void settingsApply()
-{
-	long li = logInterval;
-	scheduleTime[cycle] = 1000 * li;
-	scheduleEvent(cycle, scheduleTime[cycle]);
 }
