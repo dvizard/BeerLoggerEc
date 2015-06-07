@@ -50,11 +50,13 @@ enum UiResults {
 };
 
 // I'd like to have a better way to define this. Right now it's a bit murky
-#define UI_TARGET_NUM 3
+#define UI_TARGET_NUM 5
 enum UiTargets {
 	UIT_TEMP_DISPLAY = 0,
 	UIT_LOGGER_SETTINGS = 1,
 	UIT_MESSAGE = 2,
+	UIT_THERMOSTAT_SETTINGS = 3,
+	UIT_THERMOSTAT_MODE = 4,
 	UIT_DUMMY = -1
 };
 
@@ -69,11 +71,15 @@ volatile UiTarget uiTargets[UI_TARGET_NUM] = {
 		&uiTempDisplay,
 		&uiLoggerSettings,
 		&uiMessage,
+		&uiThermostatSettings,
+		&uiThermostatMode,
 };
 int uiTargetContinueMap[UI_TARGET_NUM] = {
-		UIT_LOGGER_SETTINGS,
-		UIT_TEMP_DISPLAY,
-		UIT_DUMMY
+		UIT_LOGGER_SETTINGS, // from UIT_TEMP_DISPLAY
+		UIT_THERMOSTAT_SETTINGS, // from UIT_LOGGER_SETTINGS
+		UIT_DUMMY, // from UIT_MESSAGE (because it always returns RET_HOME)
+		UIT_THERMOSTAT_MODE, // from UIT_THERMOSTAT_SETTINGS
+		UIT_TEMP_DISPLAY // from UIT_THERMOSTAT_MODE
 };
 
 volatile int uiTarget;
@@ -98,14 +104,16 @@ volatile int logInterval = 10;
 
 typedef void (* ScheduleFP)(void);
 
-#define SCHEDULE_EVENTS_NO 5
+#define SCHEDULE_EVENTS_NO 7
 
 enum scheduleEvents {
   updateScreen = 0,
   cycle = 1,
   readAirTemp = 2,
   clearDebounce = 3,
-  manageSD = 4
+  manageSD = 4,
+  settingsLoad = 5,
+  settingsStore = 6,
   };
 
 volatile long scheduleTime[SCHEDULE_EVENTS_NO] =
@@ -114,7 +122,9 @@ volatile long scheduleTime[SCHEDULE_EVENTS_NO] =
   1000 * logInterval,
   0,
   0,
-  -1
+  -1,
+  -1,
+  -1,
 };
 
 boolean scheduleActive[SCHEDULE_EVENTS_NO] =
@@ -123,7 +133,9 @@ boolean scheduleActive[SCHEDULE_EVENTS_NO] =
    true,
    false,
    false,
-   true
+   true,
+   false,
+   false,
 };
 
 // 0: trigger on start
@@ -135,7 +147,9 @@ unsigned long scheduleTarget[SCHEDULE_EVENTS_NO] =
   0,
   -1,
   -1,
-  0 // init SD on startup
+  0, // init SD on startup
+  -1,
+  -1,
   };
 
 volatile long scheduleCommand[SCHEDULE_EVENTS_NO] =
@@ -149,12 +163,14 @@ ScheduleFP scheduleFunc[SCHEDULE_EVENTS_NO] =
   &fpCycle,
   &fpReadAirTemp,
   &fpClearDebounce,
-  &fpManageSD
+  &fpManageSD,
+  &fpSettingsLoad,
+  &fpSettingsStore,
   };
 
 volatile boolean eventsExecuted[SCHEDULE_EVENTS_NO] =
 {
-  false,false,false,false,false
+  false,false,false,false,false,false,false
   };
 
 
@@ -174,11 +190,28 @@ File logfile;
 float dataBuffer[256][SENSOR_COUNT];
 DateTime tsBuffer[256];
 
+float thermostatSettings[4] = {
+		0, // target temperature
+		1, // target temperature window
+		0, // temperature undershoot
+		0, // temperature overshoot
+};
+enum thermostatModes {
+	THERMOSTAT_OFF = 0,
+	THERMOSTAT_HEAT = 1,
+	THERMOSTAT_COOL = 2,
+};
+volatile int thermostatMode = THERMOSTAT_OFF;
+
+
 #define DEBOUNCE_DELAY 400
 volatile boolean debouncing = false;
 
 #define LOOP_DELAY 40
 const boolean delayLoop = true;
+
+char chPM = 177; // plus/minus sign
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -272,6 +305,19 @@ void fpUpdateScreen()
   handleUi(UI_DISPLAY);
 
 }
+
+/// Software: Load/store settings
+void fpSettingsLoad()
+{
+
+
+}
+void fpSettingsStore()
+{
+
+
+}
+
 void fpCycle()
 {
   bufferPos++;
@@ -472,11 +518,15 @@ void handleUi(int action)
 	switch(ret)
 	{
 	case RET_HOME:
+		(uiTargets[uiTarget])(UI_LEAVE);
 		uiTarget = UIT_TEMP_DISPLAY;
+		(uiTargets[uiTarget])(UI_ENTER);
 	    scheduleEvent(updateScreen, 1);
 		break;
 	case RET_CONTINUE:
+		(uiTargets[uiTarget])(UI_LEAVE);
 		uiTarget = uiTargetContinueMap[uiTarget];
+		(uiTargets[uiTarget])(UI_ENTER);
 	    scheduleEvent(updateScreen, 1);
 		break;
 	case RET_STAY:
@@ -592,6 +642,150 @@ int uiMessage(int action)
 	return(ret);
 }
 
+int uiThermostatSettings(int action)
+{
+	int ret = RET_STAY;
+	static float s[4];
+	static int sPos = 0;
+
+	switch(action)
+	{
+	case UI_LEAVE:
+		break;
+	case UI_ENTER:
+		for(int c = 0; c < 4; c++)
+		{
+			s[c] = thermostatSettings[c];
+		}
+		sPos = 0;
+		break;
+	case UI_ENC_UP:
+		s[sPos] += 0.1;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_DOWN:
+		s[sPos] -= 0.1;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_SW:
+		sPos++;
+		for(int c = 0; c < 4; c++)
+		{
+			thermostatSettings[c] = s[c];
+		}
+		if(sPos == 4)
+			ret = RET_CONTINUE;
+		else
+		    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_CLEAR:
+		ret = RET_HOME;
+		break;
+	case UI_DISPLAY:
+	    thermostatSettingsDisplay(s, sPos, -1);
+	    break;
+	}
+	return(ret);
+}
+
+int uiLoadStoreSettings(int action)
+{
+	int ret = RET_STAY;
+	static int option = 0;
+
+	switch(action)
+	{
+	case UI_LEAVE:
+		break;
+	case UI_ENTER:
+		break;
+	case UI_ENC_UP:
+		option++;
+		if(option > 2) option = 0;
+		scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_DOWN:
+		option--;
+		if(option < 0) option = 2;
+		scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_SW:
+		switch(option)
+		{
+		case 0:
+			break;
+		case 1:
+			scheduleEvent(settingsStore, 1);
+			break;
+		case 2:
+			scheduleEvent(settingsLoad, 1);
+			break;
+		}
+		ret = RET_CONTINUE;
+		break;
+	case UI_CLEAR:
+		ret = RET_HOME;
+		break;
+	case UI_DISPLAY:
+		lcd.setCursor(0,0);
+		lcd.print("Load/store:");
+		lcd.setCursor(0,1);
+		switch(option)
+		{
+		case 0:
+			lcd.print("Cancel");
+			break;
+		case 1:
+			lcd.print("Store");
+			break;
+		case 2:
+			lcd.print("Load");
+			break;
+		}
+		ret = RET_STAY;
+		break;
+	}
+	return(ret);
+}
+
+int uiThermostatMode(int action)
+{
+	int ret = RET_STAY;
+	static int thMode = 0;
+
+	switch(action)
+	{
+	case UI_LEAVE:
+		break;
+	case UI_ENTER:
+		thMode = thermostatMode;
+		break;
+	case UI_ENC_UP:
+		thMode++;
+		if(thMode > 2)
+			thMode = 0;
+	    scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_DOWN:
+		thMode--;
+		if(thMode < 0)
+			thMode = 2;
+		scheduleEvent(updateScreen, 1);
+		break;
+	case UI_ENC_SW:
+		thermostatMode = thMode;
+		ret = RET_CONTINUE;
+		break;
+	case UI_CLEAR:
+		ret = RET_HOME;
+		break;
+	case UI_DISPLAY:
+	    thermostatSettingsDisplay(NULL, -1, thMode);
+	    break;
+	}
+	return(ret);
+}
+
 
 void mainDisplay()
 {
@@ -635,6 +829,78 @@ void mainDisplay()
     {
     	lcd.noCursor();
     }
+}
+
+void thermostatSettingsDisplay(float * s, int sPos, int thMode)
+{
+	char outString[25]; // just to be safe that we will never write into strange memory
+
+	if(s == NULL)
+	{
+		s = thermostatSettings;
+		sPos = -1;
+	}
+	else
+		thMode = thermostatMode;
+
+	// row 1: Set: 12.1 +- 0.3
+//	lcd.setCursor(0,0);
+//	sprintf(outString, "Set:%3.1f+-%1.1f", s[0], s[1]);
+//	lcd.print(outString);
+	lcd.setCursor(0,0);
+	lcd.print("Set:");
+	lcd.print(s[0], 1);
+	lcd.setCursor(9,0);
+	lcd.print("+-");
+	lcd.print(s[1],1);
+
+	// row 2: OS:0.1 US:0.1 H
+
+//	sprintf(outString, "OS:%1.1f US:%1.1f", s[2], s[3]);
+//	lcd.setCursor(0,1);
+//	lcd.print(outString);
+	lcd.setCursor(0,1);
+	lcd.print("OS:");
+	lcd.print(s[2],1);
+	lcd.setCursor(7,1);
+	lcd.print("US:");
+	lcd.print(s[3],1);
+
+	lcd.setCursor(15,1);
+	// (last char "H": H for Heat, C for Cool, - for Off)
+	switch(thMode)
+	{
+	case THERMOSTAT_OFF:
+		lcd.print("-");
+		break;
+	case THERMOSTAT_HEAT:
+		lcd.print("H");
+		break;
+	case THERMOSTAT_COOL:
+		lcd.print("C");
+		break;
+	}
+	// Set the cursor if appropriate
+	switch(sPos)
+	{
+	case 0:
+		lcd.setCursor(4,0);
+		break;
+	case 1:
+		lcd.setCursor(11,0);
+		break;
+	case 2:
+		lcd.setCursor(3,1);
+		break;
+	case 3:
+		lcd.setCursor(10,1);
+		break;
+	case -1:
+		lcd.setCursor(15,1);
+		break;
+	}
+	lcd.cursor();
+
 }
 
 void toggleWriteMode(){
