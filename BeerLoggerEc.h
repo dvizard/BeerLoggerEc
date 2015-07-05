@@ -23,8 +23,7 @@ void setup();
 //add your function definitions for the project BeerLoggerEc here
 
 void scheduleEvent(int eventId, long tDelay);
-void doEncoderA();
-void doEncoderB();
+
 float getAirTemp();
 float getLiquidTemp();
 
@@ -34,27 +33,37 @@ void fpClearDebounce();
 void fpManageSD();
 void fpUpdateScreen();
 void fpCycle();
+void fpSettingsLoad();
+void fpSettingsStore();
 
-// Encoder target functions
-void encScreenPos(int);
-void encLogInterval(int);
-
-
+// Actor functions (that do actual stuff)
 void writeLog(int index);
+void control();
 
 void setMessage(String msg);
+
+// Encoder and clear button interrupt handlers
+void doEncoderA();
+void doEncoderB();
 void doEncSw();
 void doClearButton();
 
 
-void settingsApply();
+void settingApply(String name, String value);
+String settingPrint(String name, String value);
+
 
 void mainDisplay();
+void thermostatSettingsDisplay(float *, int, int);
 void toggleWriteMode();
+void controlRelay(float);
 
 int uiLoggerSettings(int);
 int uiTempDisplay(int);
 int uiMessage(int);
+int uiThermostatSettings(int);
+int uiThermostatMode(int);
+int uiLoadStoreSettings(int);
 
 void handleUi(int);
 
@@ -62,3 +71,4 @@ void handleUi(int);
 
 //Do not add code below this line
 #endif /* _BeerLoggerEc_H_ */
+

@@ -50,13 +50,14 @@ enum UiResults {
 };
 
 // I'd like to have a better way to define this. Right now it's a bit murky
-#define UI_TARGET_NUM 5
+#define UI_TARGET_NUM 6
 enum UiTargets {
 	UIT_TEMP_DISPLAY = 0,
 	UIT_LOGGER_SETTINGS = 1,
 	UIT_MESSAGE = 2,
 	UIT_THERMOSTAT_SETTINGS = 3,
 	UIT_THERMOSTAT_MODE = 4,
+	UIT_LOAD_STORE_SETTINGS = 5,
 	UIT_DUMMY = -1
 };
 
@@ -73,13 +74,16 @@ volatile UiTarget uiTargets[UI_TARGET_NUM] = {
 		&uiMessage,
 		&uiThermostatSettings,
 		&uiThermostatMode,
+		&uiLoadStoreSettings,
 };
 int uiTargetContinueMap[UI_TARGET_NUM] = {
 		UIT_LOGGER_SETTINGS, // from UIT_TEMP_DISPLAY
 		UIT_THERMOSTAT_SETTINGS, // from UIT_LOGGER_SETTINGS
 		UIT_DUMMY, // from UIT_MESSAGE (because it always returns RET_HOME)
 		UIT_THERMOSTAT_MODE, // from UIT_THERMOSTAT_SETTINGS
-		UIT_TEMP_DISPLAY // from UIT_THERMOSTAT_MODE
+		UIT_LOAD_STORE_SETTINGS, // from UIT_THERMOSTAT_MODE
+		UIT_TEMP_DISPLAY, // from UIT_LOAD_STORE_SETTINGS
+
 };
 
 volatile int uiTarget;
@@ -184,6 +188,7 @@ volatile byte screenPos = 0;
 byte lastWrite = 0;
 byte bufferPos = 0;
 boolean liveWrite = true;
+boolean startupSettingsLoaded = false;
 File logfile;
 
 #define SENSOR_COUNT 2
@@ -203,14 +208,16 @@ enum thermostatModes {
 };
 volatile int thermostatMode = THERMOSTAT_OFF;
 
+#define RELAY_PIN 40
+bool relayState = false;
+int relayStartupDelay = 3;
+
 
 #define DEBOUNCE_DELAY 400
 volatile boolean debouncing = false;
 
 #define LOOP_DELAY 40
 const boolean delayLoop = true;
-
-char chPM = 177; // plus/minus sign
 
 
 void setup() {
@@ -220,6 +227,9 @@ void setup() {
   pinMode(encoderPinB, INPUT_PULLUP);
   pinMode(encoderSW, INPUT_PULLUP);
   pinMode(clearButton, INPUT_PULLUP);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, HIGH);
+
   // encoder pin on PCE (pin a)
   attachPinChangeInterrupt(encoderPinA, doEncoderA, CHANGE);
   // encoder pin on PCE (pin b)
@@ -309,12 +319,110 @@ void fpUpdateScreen()
 /// Software: Load/store settings
 void fpSettingsLoad()
 {
+	File settingsFile;
+	char character;
+	String settingName;
+	String settingValue;
+	if(liveWrite)
+	{
+		// Close logfile and open settings file
+		logfile.close();
+		settingsFile = SD.open("settings.txt");
 
+		char character;
+		String settingName;
+		String settingValue;
+
+		if (settingsFile) {
+			while (settingsFile.available()) {
+				character = settingsFile.read();
+				while((settingsFile.available()) && (character != '[')){
+					character = settingsFile.read();
+				}
+				character = settingsFile.read();
+				while((settingsFile.available()) && (character != '=')){
+					settingName = settingName + character;
+					character = settingsFile.read();
+				}
+				character = settingsFile.read();
+				while((settingsFile.available()) && (character != ']')){
+					settingValue = settingValue + character;
+					character = settingsFile.read();
+				}
+				if(character == ']'){
+
+					// Apply the value to the parameter
+					settingApply(settingName,settingValue);
+					// Reset Strings
+					settingName = "";
+					settingValue = "";
+				}
+			}
+			settingsFile.close();
+		}
+		else
+		{
+
+			// if the file didn't open, print an error:
+			setMessage("error loading");
+		}
+
+		// Reopen the logfile at the end
+		logfile = SD.open("log.txt", FILE_WRITE);
+	}
+	else
+	{
+		setMessage("SD inactive");
+	}
 
 }
+
 void fpSettingsStore()
 {
 
+	File settingsFile;
+	char character;
+	String settingName;
+	String settingValue;
+	if(liveWrite)
+	{
+		logfile.close();
+		 SD.remove("settings.txt");
+		 // Create new one
+		 settingsFile = SD.open("settings.txt", FILE_WRITE);
+	}
+	// Delete the old One
+	 SD.remove("settings.txt");
+	 // Create new one
+	 settingsFile = SD.open("settings.txt", FILE_WRITE);
+	 // writing in the file works just like regular print()/println() function
+
+	 settingsFile.println(settingPrint("logInterval", String(logInterval) ));
+	 settingsFile.println(settingPrint("tempTarget", String(thermostatSettings[0],1) ));
+	 settingsFile.println(settingPrint("tempRange", String(thermostatSettings[1],1) ));
+	 settingsFile.println(settingPrint("tempUndershoot", String(thermostatSettings[2],1) ));
+	 settingsFile.println(settingPrint("tempOvershoot", String(thermostatSettings[3],1) ));
+
+	 String tsMode = "";
+	 switch(thermostatMode)
+	 {
+	 case THERMOSTAT_HEAT:
+		 tsMode = "H";
+		 break;
+	 case THERMOSTAT_COOL:
+		 tsMode = "C";
+		 break;
+	 case THERMOSTAT_OFF:
+		 tsMode = "X";
+		 break;
+	 }
+	 settingsFile.println(settingPrint("thermostatMode", tsMode ));
+
+	 // close the file:
+	 settingsFile.close();
+	 //Serial.println("Writing done.");
+
+	 logfile = SD.open("log.txt");
 
 }
 
@@ -324,9 +432,14 @@ void fpCycle()
   // Keep the screen at the old position if it was not on liveshow (pos 0)
   if(screenPos != 0) screenPos++;
   // read date/time and temperatures into current buffer
+
+  float liquidTemp = getLiquidTemp();
+
   tsBuffer[bufferPos] = RTC.now();
   dataBuffer[bufferPos][0] = getAirTemp();
-  dataBuffer[bufferPos][1] = getLiquidTemp();
+  dataBuffer[bufferPos][1] = liquidTemp;
+
+  controlRelay(liquidTemp);
 
   if(liveWrite)
   {
@@ -419,6 +532,8 @@ void writeLog(int index)
   logfile.print(tAir);
   logfile.print(";");
   logfile.print(tLiquid);
+  logfile.print(";");
+  logfile.print(relayState);
   logfile.println();
 }
 
@@ -436,13 +551,20 @@ void fpManageSD(){
       liveWrite = false;
     }
     else
+    {
       logfile = SD.open("log.txt", FILE_WRITE);
+      if(!startupSettingsLoaded)
+    	  scheduleEvent(settingsLoad, 1);
+    }
   }
   else
   {
     logfile.close();
     SD.end();
   }
+
+  // Regardless whether or not it worked:
+  startupSettingsLoaded = true;
 }
 
 /// Software: helper to get index position
@@ -698,6 +820,7 @@ int uiLoadStoreSettings(int action)
 	case UI_LEAVE:
 		break;
 	case UI_ENTER:
+		option = 0;
 		break;
 	case UI_ENC_UP:
 		option++;
@@ -908,4 +1031,123 @@ void toggleWriteMode(){
   scheduleEvent(manageSD, 1);
 
   scheduleEvent(updateScreen, 1);
+}
+
+
+void settingApply(String name, String value)
+{
+
+	// For info:
+	//	float thermostatSettings[4] = {
+	//			0, // target temperature
+	//			1, // target temperature window
+	//			0, // temperature undershoot
+	//			0, // temperature overshoot
+	//	};
+
+	if(name.equals("logInterval"))
+	{
+		int li = value.toInt();
+		logInterval = li;
+		scheduleTime[cycle] = 1000 * li;
+		scheduleEvent(cycle, scheduleTime[cycle]);
+	}
+	else if(name.equals("tempTarget"))
+	{
+		thermostatSettings[0] = value.toFloat();
+	}
+	else if(name.equals("tempRange"))
+	{
+		thermostatSettings[1] = value.toFloat();
+	}
+	else if(name.equals("tempUndershoot"))
+	{
+		thermostatSettings[2] = value.toFloat();
+	}
+	else if(name.equals("tempOvershoot"))
+	{
+		thermostatSettings[3] = value.toFloat();
+
+	}
+	else if(name.equals("thermostatMode"))
+	{
+		if(value.equals("H"))
+			thermostatMode = THERMOSTAT_HEAT;
+		else if(value.equals("C"))
+			thermostatMode = THERMOSTAT_COOL;
+		else if(value.equals("X"))
+			thermostatMode = THERMOSTAT_OFF;
+	}
+}
+
+
+String settingPrint(String name, String value)
+{
+	String out;
+	out = out + "[";
+	out = out + name;
+	out = out + "=";
+	out = out + value;
+	out = out + "]";
+	return(out);
+}
+
+
+void controlRelay(float controlTemp)
+{
+	// When heating, we expect the temperature to go tOvershoot over its actual value.
+	// When in heating mode but not heating, we expect the temperature to go
+	// 	tUndershoot under its actual value.
+	// Cooling: umgekehrt
+
+	float switchTemp = 0;
+	// for info:
+	//	float thermostatSettings[4] = {
+	//			0, // target temperature
+	//			1, // target temperature window
+	//			0, // temperature undershoot
+	//			0, // temperature overshoot
+	//	};
+
+	switch(thermostatMode)
+	{
+	case THERMOSTAT_HEAT:
+		if(!relayState)
+		{
+			switchTemp = controlTemp - thermostatSettings[2];
+			if(switchTemp <= thermostatSettings[0] - thermostatSettings[1])
+				relayState = true;
+		}
+		else
+		{
+			switchTemp = controlTemp + thermostatSettings[3];
+			if(switchTemp >= thermostatSettings[0] + thermostatSettings[1])
+				relayState = false;
+		}
+		break;
+	case THERMOSTAT_COOL:
+		if(!relayState)
+		{
+			switchTemp = controlTemp + thermostatSettings[3];
+			if(switchTemp >= thermostatSettings[0] + thermostatSettings[1])
+				relayState = true;
+		}
+		else
+		{
+			switchTemp = controlTemp - thermostatSettings[2];
+			if(switchTemp <= thermostatSettings[0] - thermostatSettings[1])
+				relayState = false;
+		}
+		break;
+	case THERMOSTAT_OFF:
+		break;
+	}
+
+	if(thermostatMode != THERMOSTAT_OFF)
+	{
+		if(relayState)
+			digitalWrite(RELAY_PIN, LOW);
+		else
+			digitalWrite(RELAY_PIN, HIGH);
+	}
 }
