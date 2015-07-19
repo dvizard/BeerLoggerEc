@@ -25,12 +25,14 @@ int refPin = A7;
 
 /// Rotary encoder
 enum PinAssignments {
-  encoderPinA = A11,   // right (labeled DT on our decoder, yellow wire)
-  encoderPinB = A10,   // left (labeled CLK on our decoder, green wire)
+  encoderPinA = A10,   // right (labeled DT on our decoder, yellow wire)
+  encoderPinB = A11,   // left (labeled CLK on our decoder, green wire)
   encoderSW = A12,    // switch (labeled SW on our decoder, orange wire)
 // connect the +5v and gnd appropriately
   /// Write mode switch
   clearButton = A13,
+//  fake5v = A14,
+//  fakeGnd = A15
 };
 
 
@@ -95,7 +97,7 @@ boolean A_set = false;
 boolean B_set = false;
 
 /// LCD
-LiquidCrystal lcd(35,34, 30,31,32,33);
+LiquidCrystal lcd(51, 53, 40, 38, 36, 34);
 
 /// RTC
 RTC_DS1307 RTC;
@@ -227,6 +229,11 @@ void setup() {
   pinMode(encoderPinB, INPUT_PULLUP);
   pinMode(encoderSW, INPUT_PULLUP);
   pinMode(clearButton, INPUT_PULLUP);
+//  pinMode(fake5v, OUTPUT);
+//  pinMode(fakeGnd, OUTPUT);
+//  digitalWrite(fake5v, HIGH);
+//  digitalWrite(fakeGnd, LOW);
+
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, HIGH);
 
