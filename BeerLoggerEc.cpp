@@ -10,6 +10,7 @@
 #include "SD.h"
 #include <SPI.h>
 
+
 /// Liquid sensor
 // Data wire is plugged into pin 2 on the Arduino
 #define ONE_WIRE_BUS 22
@@ -17,11 +18,6 @@
 OneWire oneWire(ONE_WIRE_BUS);
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
-
-/// Air sensor
-//TMP36 Pin Variables
-int sensorPin = A8; //the analog pin the TMP36's Vout (sense) pin is connected to
-int refPin = A7;
 
 /// Rotary encoder
 enum PinAssignments {
@@ -115,18 +111,16 @@ typedef void (* ScheduleFP)(void);
 enum scheduleEvents {
   updateScreen = 0,
   cycle = 1,
-  readAirTemp = 2,
-  clearDebounce = 3,
-  manageSD = 4,
-  settingsLoad = 5,
-  settingsStore = 6,
+  clearDebounce = 2,
+  manageSD = 3,
+  settingsLoad = 4,
+  settingsStore = 5,
   };
 
 volatile long scheduleTime[SCHEDULE_EVENTS_NO] =
 {
   2000,
   1000 * logInterval,
-  0,
   0,
   -1,
   -1,
@@ -137,7 +131,6 @@ boolean scheduleActive[SCHEDULE_EVENTS_NO] =
 {
    true,
    true,
-   false,
    false,
    true,
    false,
@@ -152,7 +145,6 @@ unsigned long scheduleTarget[SCHEDULE_EVENTS_NO] =
   0,
   0,
   -1,
-  -1,
   0, // init SD on startup
   -1,
   -1,
@@ -160,14 +152,13 @@ unsigned long scheduleTarget[SCHEDULE_EVENTS_NO] =
 
 volatile long scheduleCommand[SCHEDULE_EVENTS_NO] =
 {
-  -1,-1,-1,-1,-1
+  -1,-1,-1,-1,-1,-1
   };
 
 ScheduleFP scheduleFunc[SCHEDULE_EVENTS_NO] =
 {
   &fpUpdateScreen,
   &fpCycle,
-  &fpReadAirTemp,
   &fpClearDebounce,
   &fpManageSD,
   &fpSettingsLoad,
@@ -176,15 +167,9 @@ ScheduleFP scheduleFunc[SCHEDULE_EVENTS_NO] =
 
 volatile boolean eventsExecuted[SCHEDULE_EVENTS_NO] =
 {
-  false,false,false,false,false,false,false
+  false,false,false,false,false,false
   };
 
-
-
-#define AIR_TEMP_BUF_SIZE 10
-float airTempBuffer[AIR_TEMP_BUF_SIZE];
-int airTempBufferPos = 0;
-int airTempBufferPosMax = 0;
 
 volatile byte screenPos = 0;
 byte lastWrite = 0;
@@ -210,7 +195,8 @@ enum thermostatModes {
 };
 volatile int thermostatMode = THERMOSTAT_OFF;
 
-#define RELAY_PIN 40
+#define RELAY_PIN 44
+#define RELAY_PIN_2 46
 bool relayState = false;
 int relayStartupDelay = 3;
 
@@ -221,6 +207,9 @@ volatile boolean debouncing = false;
 #define LOOP_DELAY 40
 const boolean delayLoop = true;
 
+
+DeviceAddress temp1 = { 0x28, 0xA2, 0x8C, 0x97, 0x05, 0x00, 0x00, 0x94 };
+DeviceAddress temp2 = { 0x28, 0xFF, 0xA9, 0x02, 0x64, 0x14, 0x03, 0x81 };
 
 void setup() {
   // put your setup code here, to run once:
@@ -235,7 +224,9 @@ void setup() {
 //  digitalWrite(fakeGnd, LOW);
 
   pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RELAY_PIN_2, OUTPUT);
   digitalWrite(RELAY_PIN, HIGH);
+  digitalWrite(RELAY_PIN_2, HIGH);
 
   // encoder pin on PCE (pin a)
   attachPinChangeInterrupt(encoderPinA, doEncoderA, CHANGE);
@@ -440,13 +431,15 @@ void fpCycle()
   if(screenPos != 0) screenPos++;
   // read date/time and temperatures into current buffer
 
-  float liquidTemp = getLiquidTemp();
+  sensors.requestTemperatures(); // Send the command to get temperatures
+  float airTemp =   sensors.getTempC(temp2);
+  float liquidTemp =   sensors.getTempC(temp1);
 
   tsBuffer[bufferPos] = RTC.now();
-  dataBuffer[bufferPos][0] = getAirTemp();
+  dataBuffer[bufferPos][0] = airTemp;
   dataBuffer[bufferPos][1] = liquidTemp;
 
-  controlRelay(liquidTemp);
+  controlRelay(airTemp, liquidTemp);
 
   if(liveWrite)
   {
@@ -462,25 +455,6 @@ void fpCycle()
 
 }
 
-float getAirTemp()
-{
-   // Read multiple times to get a halfway decent result
-   long reading = analogRead(sensorPin);
-   long ref = analogRead(refPin);
-   reading = 0;
-   ref = 0;
-   for(int n=0;n<8;n++)
-   {
-	   delay(20);
-	   reading += analogRead(sensorPin);
-	   ref += analogRead(refPin);
-   }
-
-  float voltage = 3.300 * reading / ref;
-
-  float temperatureC = (voltage - 0.5) * 100 ;
-  return(temperatureC);
-}
 
 //float getAirTemp()
 //{
@@ -500,33 +474,6 @@ float getAirTemp()
 //  return tempTot;
 //
 //}
-
-float getLiquidTemp()
-{
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  return(sensors.getTempCByIndex(0)); // Why "byIndex"? You can have more than one IC on the same bus. 0 refers to the first IC on the wire
-}
-
-void fpReadAirTemp()
-{
-
-// Deactivated until I fix the problem. I don't get it
-//  // Wraparound
-//  if(airTempBufferPos >= AIR_TEMP_BUF_SIZE)
-//    airTempBufferPos = 0;
-//  // Adjust "divisor"
-//  if(airTempBufferPos >= airTempBufferPosMax)
-//    airTempBufferPosMax = airTempBufferPos;
-//
-//  // Read temperature and convert to C
-//  int reading = analogRead(sensorPin);
-//  float voltage = reading * 4.84;
-//  voltage /= 1024.0;
-//  float temperatureC = (voltage - 0.5) * 100 ;
-//  airTempBuffer[airTempBufferPos] = temperatureC;
-//
-//  airTempBufferPos++;
-}
 
 
 void writeLog(int index)
@@ -1100,13 +1047,14 @@ String settingPrint(String name, String value)
 }
 
 
-void controlRelay(float controlTemp)
+void controlRelay(float airTemp, float liquidTemp)
 {
 	// When heating, we expect the temperature to go tOvershoot over its actual value.
 	// When in heating mode but not heating, we expect the temperature to go
 	// 	tUndershoot under its actual value.
 	// Cooling: umgekehrt
 
+	static bool cooling = false;
 	float switchTemp = 0;
 	// for info:
 	//	float thermostatSettings[4] = {
@@ -1121,29 +1069,40 @@ void controlRelay(float controlTemp)
 	case THERMOSTAT_HEAT:
 		if(!relayState)
 		{
-			switchTemp = controlTemp - thermostatSettings[2];
+			switchTemp = liquidTemp - thermostatSettings[2];
 			if(switchTemp <= thermostatSettings[0] - thermostatSettings[1])
 				relayState = true;
 		}
 		else
 		{
-			switchTemp = controlTemp + thermostatSettings[3];
+			switchTemp = liquidTemp + thermostatSettings[3];
 			if(switchTemp >= thermostatSettings[0] + thermostatSettings[1])
 				relayState = false;
 		}
 		break;
+	// For THERMOSTAT_COOL, the US/OS indicates the maximum undershoot/overshoot
+	// of the AIR temp
+	// compared to target liquid temp.
 	case THERMOSTAT_COOL:
-		if(!relayState)
+		// Switch cooling mode (general mode)
+		if(!cooling)
 		{
-			switchTemp = controlTemp + thermostatSettings[3];
-			if(switchTemp >= thermostatSettings[0] + thermostatSettings[1])
-				relayState = true;
+			if(liquidTemp >= thermostatSettings[0] + thermostatSettings[1])
+				cooling = true;
 		}
 		else
 		{
-			switchTemp = controlTemp - thermostatSettings[2];
-			if(switchTemp <= thermostatSettings[0] - thermostatSettings[1])
+			if(liquidTemp <= thermostatSettings[0] - thermostatSettings[1] )
+				cooling = false;
+		}
+		// Now, IF cooling mode is on, determine if we actually have to cool
+		// or if the air is cold enough already
+		if(cooling)
+		{
+			if(relayState && (airTemp < thermostatSettings[0] - thermostatSettings[2]))
 				relayState = false;
+			else if(!relayState && (airTemp > thermostatSettings[0] + thermostatSettings[3]))
+				relayState = true;
 		}
 		break;
 	case THERMOSTAT_OFF:

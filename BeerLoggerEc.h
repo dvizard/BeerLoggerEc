@@ -24,11 +24,7 @@ void setup();
 
 void scheduleEvent(int eventId, long tDelay);
 
-float getAirTemp();
-float getLiquidTemp();
-
 // "Schedule function pointer" functions
-void fpReadAirTemp();
 void fpClearDebounce();
 void fpManageSD();
 void fpUpdateScreen();
@@ -56,7 +52,7 @@ String settingPrint(String name, String value);
 void mainDisplay();
 void thermostatSettingsDisplay(float *, int, int);
 void toggleWriteMode();
-void controlRelay(float);
+void controlRelay(float, float);
 
 int uiLoggerSettings(int);
 int uiTempDisplay(int);
