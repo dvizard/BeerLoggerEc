@@ -1,10 +1,10 @@
 // Do not remove the include below
-#include "BeerLoggerEc.h"
+#include "BeerLogger.h"
 
 #include <LiquidCrystal.h>
 #include <Wire.h>
 #include "RTClib.h"
-#include <PinChangeInt.h>
+#include <PinChangeInterrupt.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "SD.h"
@@ -230,12 +230,16 @@ void setup() {
   digitalWrite(RELAY_PIN_2, HIGH);
 
   // encoder pin on PCE (pin a)
-  attachPinChangeInterrupt(encoderPinA, doEncoderA, CHANGE);
+  attachPinChangeInterrupt(
+		  digitalPinToPinChangeInterrupt(encoderPinA), doEncoderA, CHANGE);
   // encoder pin on PCE (pin b)
-  attachPinChangeInterrupt(encoderPinB, doEncoderB, CHANGE);
+  attachPinChangeInterrupt(
+		  digitalPinToPinChangeInterrupt(encoderPinB), doEncoderB, CHANGE);
 
-  attachPinChangeInterrupt(encoderSW, doEncSw, RISING);
-  attachPinChangeInterrupt(clearButton, doClearButton, RISING);
+  attachPinChangeInterrupt(
+		  digitalPinToPinChangeInterrupt(encoderSW), doEncSw, RISING);
+  attachPinChangeInterrupt(
+		  digitalPinToPinChangeInterrupt(clearButton), doClearButton, RISING);
 
 
   /// RTC
