@@ -192,6 +192,7 @@ enum thermostatModes {
 	THERMOSTAT_OFF = 0,
 	THERMOSTAT_HEAT = 1,
 	THERMOSTAT_COOL = 2,
+	THERMOSTAT_ON = 3,
 };
 volatile int thermostatMode = THERMOSTAT_OFF;
 
@@ -412,6 +413,9 @@ void fpSettingsStore()
 		 break;
 	 case THERMOSTAT_OFF:
 		 tsMode = "X";
+		 break;
+	 case THERMOSTAT_ON:
+		 tsMode = "O";
 		 break;
 	 }
 	 settingsFile.println(settingPrint("thermostatMode", tsMode ));
@@ -839,14 +843,14 @@ int uiThermostatMode(int action)
 		break;
 	case UI_ENC_UP:
 		thMode++;
-		if(thMode > 2)
+		if(thMode > 3)
 			thMode = 0;
 	    scheduleEvent(updateScreen, 1);
 		break;
 	case UI_ENC_DOWN:
 		thMode--;
 		if(thMode < 0)
-			thMode = 2;
+			thMode = 3;
 		scheduleEvent(updateScreen, 1);
 		break;
 	case UI_ENC_SW:
@@ -956,6 +960,9 @@ void thermostatSettingsDisplay(float * s, int sPos, int thMode)
 	case THERMOSTAT_COOL:
 		lcd.print("C");
 		break;
+	case THERMOSTAT_ON:
+		lcd.print("+");
+		break;
 	}
 	// Set the cursor if appropriate
 	switch(sPos)
@@ -1031,6 +1038,8 @@ void settingApply(String name, String value)
 			thermostatMode = THERMOSTAT_COOL;
 		else if(value.equals("X"))
 			thermostatMode = THERMOSTAT_OFF;
+		else if(value.equals("O"))
+			thermostatMode = THERMOSTAT_ON;
 	}
 }
 
@@ -1094,6 +1103,7 @@ void controlRelay(float airTemp, float liquidTemp)
 		{
 			if(liquidTemp <= thermostatSettings[0] - thermostatSettings[1] )
 				cooling = false;
+				relayState = false;
 		}
 		// Now, IF cooling mode is on, determine if we actually have to cool
 		// or if the air is cold enough already
@@ -1111,9 +1121,13 @@ void controlRelay(float airTemp, float liquidTemp)
 
 	if(thermostatMode != THERMOSTAT_OFF)
 	{
-		if(relayState)
+		if(thermostatMode == THERMOSTAT_ON)
+			digitalWrite(RELAY_PIN, LOW);
+		else if(relayState)
 			digitalWrite(RELAY_PIN, LOW);
 		else
 			digitalWrite(RELAY_PIN, HIGH);
 	}
+	else
+		digitalWrite(RELAY_PIN, HIGH);
 }
